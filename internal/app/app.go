@@ -1,38 +1,18 @@
 package app
 
 import (
-	"fmt"
 	"log"
 	"slices"
 	"time"
 )
 
-func Stream(cb func(StreamData) error) error {
-	// Simulate stream data
-	for i := 0; i < 10; i++ {
-		data := StreamData{
-			Channel: fmt.Sprintf("Channel %d", i%2),
-			Message: "Hello",
-		}
-		if err := cb(data); err != nil {
-			return err
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	// Wait forever
-	for {
-		time.Sleep(1 * time.Second)
-	}
-}
-
 type App struct {
-	timerMap map[string]*time.Timer
+	timerMap map[string]*AlertTimer
 }
 
 func NewApp() *App {
 	return &App{
-		timerMap: make(map[string]*time.Timer),
+		timerMap: make(map[string]*AlertTimer),
 	}
 }
 
@@ -49,9 +29,30 @@ func (a *App) Run() {
 				})
 
 				if idx == -1 {
-					log.Printf("New settings delete timer: %s\n", channel)
-					timer.Stop()
+					log.Printf("New settings deleted timer: %s\n", channel)
+					timer.Timer.Stop()
 					delete(a.timerMap, channel)
+				}
+			}
+
+			for _, setting := range settings {
+				if !setting.Enabled {
+					continue
+				}
+
+				channel := setting.Channel
+				duration := time.Duration(setting.Timeout) * time.Millisecond
+				if _, ok := a.timerMap[channel]; !ok {
+					log.Printf("New settings created timer: %s\n", channel)
+					timer := time.AfterFunc(duration, func() {
+						log.Printf("Timeout: %s\n", channel)
+						a.timerMap[channel].IsDone = true
+					})
+					a.timerMap[channel] = &AlertTimer{
+						Channel: channel,
+						Timer:   timer,
+						IsDone:  false,
+					}
 				}
 			}
 
@@ -62,26 +63,9 @@ func (a *App) Run() {
 	cb := func(data StreamData) error {
 		log.Printf("message recieved: %v\n", data)
 
-		idx := slices.IndexFunc(settings, func(setting AlertSetting) bool {
-			return setting.Channel == data.Channel && setting.Enabled
-		})
-		if idx == -1 {
-			return nil
-		}
-		setting := settings[idx]
-		channel := setting.Channel
-		duration := time.Duration(setting.Timeout) * time.Millisecond
-
-		if timer, ok := a.timerMap[channel]; ok {
-			log.Printf("Reset timer: %s\n", channel)
-			timer.Reset(duration)
-		} else {
-			log.Printf("Create timer: %s\n", channel)
-			timer := time.AfterFunc(duration, func() {
-				log.Printf("Timeout: %s\n", channel)
-				delete(a.timerMap, channel)
-			})
-			a.timerMap[channel] = timer
+		if timer, ok := a.timerMap[data.Channel]; ok {
+			log.Printf("Reset timer: %s\n", data.Channel)
+			timer.Timer.Reset(time.Duration(settings[0].Timeout) * time.Millisecond)
 		}
 
 		return nil
